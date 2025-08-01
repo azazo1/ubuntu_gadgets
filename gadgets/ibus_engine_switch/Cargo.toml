@@ -1,0 +1,16 @@
+[package]
+name = "ibus_engine_switch"
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "ibus_engine_switch"
+path = "src/main.rs"
+
+[dependencies]
+rdev = "0.5.3"
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
+which = "8.0.0"

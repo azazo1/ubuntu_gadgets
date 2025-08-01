@@ -1,0 +1,11 @@
+[workspace.package]
+version = "0.1.0"
+authors = ["azazo1 <azazo1@qq.com>"]
+description = "Some gadgets in Ubuntu."
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[workspace]
+members = ["gadgets/ibus_engine_switch"]
+resolver = "3"
