@@ -6,8 +6,10 @@ use rdev::{
 use std::{
     ffi::OsStr,
     io::{self, Read},
+    mem::transmute,
     path::PathBuf,
     process::{Command, ExitStatus, Stdio},
+    sync::RwLock,
     thread,
     time::Duration,
 };
@@ -24,8 +26,7 @@ enum SuperSpaceState {
     Detected,     // Super 按下的时候 Space 按下
 }
 
-struct Switcher {
-    ibus: PathBuf,
+struct SwitcherState {
     ctrl_pressed: bool,
     // 由于此工具在使用 ibus 切换中英文输入法的时候, ubuntu 图形桌面显示的还是原来的输入法,
     // 并没有同步进行更改, 于是在程序切换输入法的时候, 记录如果当前不是目标输入法, 那么记录下来,
@@ -36,6 +37,16 @@ struct Switcher {
     engine_pending: Option<String>,
     super_space_state: SuperSpaceState,
 }
+
+struct Switcher {
+    ibus: PathBuf,
+    xdotool: PathBuf,
+    front_window_id: RwLock<isize>,
+    state: RwLock<SwitcherState>,
+}
+
+unsafe impl Sync for Switcher {}
+unsafe impl Send for Switcher {}
 
 #[allow(dead_code)]
 struct CallState {
@@ -88,10 +99,14 @@ fn switch_engine(ibus: PathBuf, engine: impl AsRef<str>) {
 impl Switcher {
     fn new() -> Switcher {
         Switcher {
-            ctrl_pressed: false,
-            engine_pending: None,
-            super_space_state: SuperSpaceState::Normal,
+            state: RwLock::new(SwitcherState {
+                ctrl_pressed: false,
+                engine_pending: None,
+                super_space_state: SuperSpaceState::Normal,
+            }),
+            front_window_id: RwLock::new(-1),
             ibus: which::which("ibus").unwrap(),
+            xdotool: which::which("xdotool").unwrap(),
         }
     }
 
@@ -100,7 +115,8 @@ impl Switcher {
         let output = call_state.output.trim();
         if !output.is_empty() && output != engine {
             info!("Pend engine {output}.");
-            self.engine_pending = Some(output.to_string());
+            let mut state = self.state.write().unwrap();
+            state.engine_pending = Some(output.to_string());
         }
         let _ = call(&self.ibus, Some(&["engine", engine])); // 切换输入法
     }
@@ -115,46 +131,71 @@ impl Switcher {
         };
         match key {
             Key::ControlLeft | Key::ControlRight => {
-                self.ctrl_pressed = pressed;
+                let mut state = self.state.write().unwrap();
+                state.ctrl_pressed = pressed;
             }
             Key::LeftBracket if pressed => {
-                if self.ctrl_pressed {
+                if self.state.read().unwrap().ctrl_pressed {
                     self.switch_engine(ENGLISH);
                     info!("Switched to {ENGLISH}");
                 }
             }
             Key::MetaLeft | Key::MetaRight
                 if matches!(
-                    (self.super_space_state, pressed),
+                    (self.state.read().unwrap().super_space_state, pressed),
                     (SuperSpaceState::Normal, true)
                 ) =>
             {
-                self.super_space_state = SuperSpaceState::SuperPressed
+                self.state.write().unwrap().super_space_state = SuperSpaceState::SuperPressed;
             }
             Key::MetaLeft | Key::MetaRight if !pressed => {
-                if let (SuperSpaceState::Detected, Some(engine)) =
-                    (self.super_space_state, self.engine_pending.clone())
-                {
+                let sss = self.state.read().unwrap().super_space_state;
+                let engine_pending = self.state.read().unwrap().engine_pending.clone();
+                self.state.write().unwrap().super_space_state = SuperSpaceState::Normal;
+                if let (SuperSpaceState::Detected, Some(engine)) = (sss, engine_pending) {
                     info!("Release engine {engine}.");
                     let ibus = self.ibus.clone();
+                    self.state.write().unwrap().engine_pending = None;
                     thread::spawn(move || {
                         // 一段时间之后再切换, 防止和图形界面的输入法切换冲突.
                         thread::sleep(Duration::from_millis(50));
                         switch_engine(ibus, engine);
                     });
-                    self.engine_pending = None;
                 }
-                self.super_space_state = SuperSpaceState::Normal
             }
-            Key::Space if matches!(self.super_space_state, SuperSpaceState::SuperPressed) => {
-                self.super_space_state = SuperSpaceState::Detected
+            Key::Space
+                if matches!(
+                    self.state.read().unwrap().super_space_state,
+                    SuperSpaceState::SuperPressed
+                ) =>
+            {
+                self.state.write().unwrap().super_space_state = SuperSpaceState::Detected;
             }
             _ => {}
         }
     }
 
+    fn listen_window_changes(&mut self) -> ! {
+        loop {
+            let cs = call(&self.xdotool, Some(&["getactivewindow"])).unwrap();
+            if !cs.output.is_empty() {
+                let id: isize = cs.output.trim().parse().unwrap();
+                if *self.front_window_id.read().unwrap() != id {
+                    self.switch_engine(ENGLISH);
+                    *self.front_window_id.write().unwrap() = id;
+                }
+            }
+            thread::sleep(Duration::from_millis(200));
+        }
+    }
+
     fn listen(mut self) -> ! {
-        rdev::listen(move |event| self.on_event(event)).unwrap();
+        // let self1 = unsafe { transmute::<&mut Switcher, &'static mut Switcher>(&mut self) };
+        let self2 = unsafe { transmute::<&mut Switcher, &'static mut Switcher>(&mut self) };
+        // thread::spawn(|| {
+        //     self1.listen_window_changes();
+        // });
+        rdev::listen(|event| self2.on_event(event)).unwrap();
         unreachable!();
     }
 }
