@@ -143,7 +143,7 @@ impl Switcher {
                     *self.front_window_id.write().unwrap() = id;
                 }
             }
-            thread::sleep(Duration::from_millis(200));
+            thread::sleep(Duration::from_millis(2000));
         }
     }
 
