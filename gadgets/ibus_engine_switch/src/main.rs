@@ -1,4 +1,5 @@
 use clap::Parser;
+use ibus_engine_switch::listen_active_window_changes;
 use rdev::{
     Event,
     EventType::{KeyPress, KeyRelease},
@@ -11,23 +12,21 @@ use std::{
     net::{TcpListener, TcpStream},
     path::PathBuf,
     process::{Command, ExitStatus, Stdio},
-    sync::{
-        RwLock,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
     thread,
     time::Duration,
 };
 use tracing::{info, warn};
 
-const ENGLISH: &'static str = "xkb:us::eng";
-const CHINESE: &'static str = "rime";
+const ENGLISH: &str = "xkb:us::eng";
+const CHINESE: &str = "rime";
 const PORT: u16 = 14568;
 
+lazy_static::lazy_static! {
+    static ref IBUS: PathBuf = which::which("ibus").unwrap();
+}
+
 struct Switcher {
-    ibus: PathBuf,
-    xdotool: PathBuf,
-    front_window_id: RwLock<isize>,
     english: AtomicBool,
     ctrl_pressed: bool,
 }
@@ -95,9 +94,6 @@ impl Switcher {
         let mut s = Switcher {
             english: AtomicBool::new(true),
             ctrl_pressed: false,
-            front_window_id: RwLock::new(-1),
-            ibus: which::which("ibus").unwrap(),
-            xdotool: which::which("xdotool").unwrap(),
         };
         s.switch_engine(Some(true));
         s
@@ -107,7 +103,7 @@ impl Switcher {
     fn switch_engine(&mut self, english: Option<bool>) {
         let english_ = english.unwrap_or(!self.english.load(Ordering::Relaxed));
         let engine = if english_ { ENGLISH } else { CHINESE };
-        let _ = call(&self.ibus, Some(&["engine", engine]));
+        let _ = call(&*IBUS, Some(&["engine", engine]));
         info!("Switch to {engine} with arg: {english:?}.");
         self.english.store(english_, Ordering::Relaxed);
     }
@@ -133,26 +129,16 @@ impl Switcher {
         }
     }
 
-    fn listen_window_changes(&mut self) -> ! {
-        loop {
-            let cs = call(&self.xdotool, Some(&["getactivewindow"])).unwrap();
-            if !cs.output.is_empty() {
-                let id: isize = cs.output.trim().parse().unwrap();
-                if *self.front_window_id.read().unwrap() != id {
-                    self.switch_engine(Some(true));
-                    *self.front_window_id.write().unwrap() = id;
-                }
-            }
-            thread::sleep(Duration::from_millis(2000));
-        }
-    }
-
     fn listen(mut self) -> ! {
         let self1 = unsafe { transmute::<&mut Self, &mut Self>(&mut self) };
         let self2 = unsafe { transmute::<&mut Self, &mut Self>(&mut self) };
         let self3 = unsafe { transmute::<&mut Self, &mut Self>(&mut self) };
         thread::spawn(|| {
-            self1.listen_window_changes();
+            listen_active_window_changes(|_, _| {
+                thread::sleep(Duration::from_millis(1300));
+                self1.switch_engine(Some(true)); // 频繁调用此函数会导致窗口卡顿.
+            })
+            .unwrap();
         });
         thread::spawn(|| {
             // socker listen switch.
