@@ -2,8 +2,9 @@
 name = "ibus_engine_switch"
 version.workspace = true
 authors.workspace = true
-description.workspace = true
+description = "Take over the ibus engine switching from gnome."
 edition.workspace = true
+readme = "README.md"
 
 [[bin]]
 name = "ibus_engine_switch"
