@@ -1,6 +1,7 @@
 use std::{
-    env::{self, current_exe},
+    env::current_exe,
     fmt::Display,
+    io::stderr,
     path::PathBuf,
     process::Stdio,
     str::FromStr,
@@ -22,20 +23,26 @@ struct Args {
     #[clap(
         short = 'n',
         long = "next",
-        help = "Switch by n workspace. Requires that n > 0, switch to right workspace. If n exceeds range, it selects like a cycle."
+        help = "Switch by n workspace. Requires that n > 0, switch to right workspace. If n exceeds range, it selects like a cycle unless --no-cycle specific."
     )]
     switch_by_next: Option<usize>,
     #[clap(
         short = 'p',
         long = "prev",
-        help = "Switch by n workspace. Requires that n > 0, switch to left workspace. If n exceeds range, it selects like a cycle."
+        help = "Switch by n workspace. Requires that n > 0, switch to left workspace. If n exceeds range, it selects like a cycle unless --no-cycle specific."
     )]
     switch_by_prev: Option<usize>,
+    #[clap(
+        long,
+        default_value_t = false,
+        help = "Do not cycle around the workspace, see --prev/--next."
+    )]
+    no_cycle: bool,
     #[clap(
         short = 'l',
         long = "list",
         default_value_t = false,
-        help = "list the available workspaces"
+        help = "List the available workspaces"
     )]
     list_workspaces: bool,
 }
@@ -244,7 +251,7 @@ fn switch_to(idx: usize) {
     }
 }
 
-fn switch_by(delta: isize) {
+fn switch_by(delta: isize, cycle: bool) {
     let query_result = query();
     let num = query_result.len() as isize;
     if num == 0 {
@@ -255,22 +262,21 @@ fn switch_by(delta: isize) {
         .find(|ws| ws.active)
         .expect("No workspace is active.");
     let cur_idx: isize = workspace.idx as isize;
-    let mut new_idx = cur_idx.wrapping_add(delta);
-    new_idx = new_idx % num;
-    if new_idx < 0 {
-        new_idx = new_idx + num;
+    let mut new_idx;
+    if cycle {
+        new_idx = cur_idx.wrapping_add(delta);
+        new_idx = new_idx % num;
+        if new_idx < 0 {
+            new_idx = new_idx + num;
+        }
+    } else {
+        new_idx = cur_idx.saturating_add(delta);
+        new_idx = new_idx.clamp(0, num - 1);
     }
     switch_to(new_idx as usize);
 }
 
 fn main() {
-    if env::args().len() == 1 {
-        Command::new(current_exe().unwrap())
-            .arg("-h")
-            .status()
-            .unwrap();
-        return;
-    }
     let args = Args::parse();
     if args.list_workspaces {
         for ele in query() {
@@ -283,11 +289,17 @@ fn main() {
         return;
     }
     if let Some(n) = args.switch_by_next {
-        switch_by(n as isize);
+        switch_by(n as isize, !args.no_cycle);
         return;
     }
     if let Some(n) = args.switch_by_prev {
-        switch_by(-(n as isize));
+        switch_by(-(n as isize), !args.no_cycle);
         return;
     }
+    // 什么都没有执行, fallback help.
+    Command::new(current_exe().unwrap())
+        .arg("-h")
+        .stdout(stderr()) // 重定向到标准错误流.
+        .status()
+        .unwrap();
 }
