@@ -7,5 +7,5 @@ edition = "2024"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [workspace]
-members = ["gadgets/ibus_engine_switch"]
+members = ["gadgets/ibus_engine_switch", "gadgets/workspace_switch"]
 resolver = "3"
