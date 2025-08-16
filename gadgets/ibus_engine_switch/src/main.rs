@@ -12,7 +12,10 @@ use std::{
     net::{TcpListener, TcpStream},
     path::PathBuf,
     process::{Command, ExitStatus, Stdio},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::Duration,
 };
@@ -133,14 +136,24 @@ impl Switcher {
         let self1 = unsafe { transmute::<&mut Self, &mut Self>(&mut self) };
         let self2 = unsafe { transmute::<&mut Self, &mut Self>(&mut self) };
         let self3 = unsafe { transmute::<&mut Self, &mut Self>(&mut self) };
-        thread::spawn(|| {
-            listen_active_window_changes(|_, _| {
+
+        let pending_autoswitch1 = Arc::new(AtomicBool::new(false));
+        let pending_autoswitch2 = Arc::clone(&pending_autoswitch1);
+        thread::spawn(move || {
+            listen_active_window_changes(|_, id| {
+                if id == 0 {
+                    return;
+                }
+                pending_autoswitch1.store(true, Ordering::Relaxed);
                 thread::sleep(Duration::from_millis(1300));
-                self1.switch_engine(Some(true)); // 频繁调用此函数会导致窗口卡顿.
+                if pending_autoswitch1.load(Ordering::Relaxed) {
+                    pending_autoswitch1.store(false, Ordering::Relaxed);
+                    self1.switch_engine(Some(true)); // 频繁调用此函数会导致窗口卡顿.
+                }
             })
             .unwrap();
         });
-        thread::spawn(|| {
+        thread::spawn(move || {
             // socker listen switch.
             let sock = TcpListener::bind(format!("localhost:{PORT}")).unwrap();
             info!("Switch server started.");
@@ -156,7 +169,12 @@ impl Switcher {
                     continue;
                 }
                 if String::from_utf8_lossy(&buf) == "switch" {
-                    self3.switch_engine(None);
+                    if pending_autoswitch2.load(Ordering::Relaxed) {
+                        self3.switch_engine(Some(false));
+                        pending_autoswitch2.store(false, Ordering::Relaxed);
+                    } else {
+                        self3.switch_engine(None);
+                    }
                 }
             }
         });
